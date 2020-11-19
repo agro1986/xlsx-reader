@@ -156,6 +156,9 @@ class NumberFormat
     /** @var array Cache for already processed format strings. Type of each element: NumberFormatSection[] */
     private $parsed_format_cache = array();
 
+    // function($value, $styleId, $prevRow): string
+    private $format_not_found_handler = null;
+
     /**
      * @param  array $options
      *
@@ -174,6 +177,9 @@ class NumberFormat
         }
         if (!empty($options['ForceDateTimeFormat'])) {
             $this->enforced_datetime_format = $options['ForceDateTimeFormat'];
+        }
+        if (!empty($options['FormatNotFoundHandler'])) {
+            $this->format_not_found_handler = $options['FormatNotFoundHandler'];
         }
         $this->return_unformatted = !empty($options['ReturnUnformatted']);
         $this->return_date_time_objects = !empty($options['ReturnDateTimeObjects']);
@@ -223,16 +229,17 @@ class NumberFormat
     }
 
     /**
-     * @param  string $value
-     * @param  int    $xf_id In worksheet cells, this is also referred to as the "style" of a cell.
+     * @param string $value
+     * @param int $xf_id In worksheet cells, this is also referred to as the "style" of a cell.
+     * @param bool|array $prev_row
      * @return mixed|string
      *
      * @throws Exception
      */
-    public function tryFormatValue($value, $xf_id)
+    public function tryFormatValue($value, $xf_id, $prev_row = false)
     {
         if ($value !== '' && $xf_id && isset($this->xf_num_fmt_ids[$xf_id])) {
-            return $this->formatValue($value, $xf_id);
+            return $this->formatValue($value, $xf_id, $prev_row);
         }
 
         /* Do not format value, no style set or quotePrefix is set. ($xf_id = null, starts at 1) */
@@ -280,13 +287,14 @@ class NumberFormat
     /**
      * Formats the value according to the index.
      *
-     * @param   string $value
-     * @param   int    $xf_id
+     * @param string $value
+     * @param int $xf_id
+     * @param bool|array $prev_row
      * @return  string
      *
-     * @throws  Exception
+     * @throws Exception
      */
-    public function formatValue($value, $xf_id)
+    public function formatValue($value, $xf_id, $prev_row = false)
     {
         $num_fmt_id = 0;
         if (isset($this->xf_num_fmt_ids[$xf_id]) && $this->xf_num_fmt_ids[$xf_id] !== null) {
@@ -298,7 +306,7 @@ class NumberFormat
         }
 
         // Get definition of format for the given format_index.
-        $section = $this->getFormatSectionForValue($value, $num_fmt_id);
+        $section = $this->getFormatSectionForValue($value, $num_fmt_id, $prev_row);
 
         // If percentage values are expected, multiply value accordingly before formatting.
         if ($section->isPercentage()) {
@@ -531,15 +539,15 @@ class NumberFormat
     /**
      * Gets the format section to be used for the given value with the given format_index.
      *
-     * @param  string $value
-     * @param  int    $format_index
+     * @param string $value
+     * @param int $format_index
+     * @param bool|array $prev_row
      * @return NumberFormatSection
      *
-     * @throws RuntimeException
      */
-    private function getFormatSectionForValue($value, $format_index)
+    private function getFormatSectionForValue($value, $format_index, $prev_row = false)
     {
-        $sections = $this->getFormatSections($format_index);
+        $sections = $this->getFormatSections($format_index, $prev_row, $value);
         return $this->getSectionForValue($value, $sections);
     }
 
@@ -606,12 +614,13 @@ class NumberFormat
     /**
      * Gets the format data for the given format index.
      *
-     * @param  int $format_index
+     * @param int $format_index
+     * @param bool|array $prev_row
+     * @param $value
      * @return NumberFormatSection[]
      *
-     * @throws RuntimeException
      */
-    private function getFormatSections($format_index)
+    private function getFormatSections($format_index, $prev_row = false, $value = null)
     {
         if (isset($this->parsed_format_cache[$format_index])) {
             return $this->parsed_format_cache[$format_index];
@@ -628,8 +637,16 @@ class NumberFormat
         }
 
         if ($format_code === null) {
-            // Definition for requested format_index could not be found.
-            throw new RuntimeException('format with index [' . $format_index . '] was not defined.');
+            if($this->format_not_found_handler === null) {
+                // Definition for requested format_index could not be found.
+                throw new RuntimeException('format with index [' . $format_index . '] was not defined.');
+            }
+
+            $format_code = call_user_func_array($this->format_not_found_handler, [
+                $value,
+                $format_index,
+                $prev_row,
+            ]);
         }
 
         $sections = $this->prepareFormatSections($format_code);
