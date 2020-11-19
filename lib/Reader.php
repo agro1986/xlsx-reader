@@ -62,6 +62,12 @@ class Reader implements Iterator, Countable
     /** @var bool|array Contents of last read row. */
     private $current_row = false;
 
+    /** @var bool|array Contents of previously read row. */
+    private $prev_row = false;
+
+    // function($value, $styleId, $prevRow): string
+    private $format_not_found_handler = null;
+
     /**
      * @param array $options Reader configuration; Permitted values:
      *      - TempDir (string)
@@ -91,6 +97,10 @@ class Reader implements Iterator, Countable
                 throw new InvalidArgumentException('SharedStringsConfiguration has an invalid type.');
             }
             $this->shared_strings_configuration = $options['SharedStringsConfiguration'];
+        }
+
+        if (!empty($options['FormatNotFoundHandler'])) {
+            $this->format_not_found_handler = $options['FormatNotFoundHandler'];
         }
 
         $this->skip_empty_cells = !empty($options['SkipEmptyCells']);
@@ -268,6 +278,7 @@ class Reader implements Iterator, Countable
     {
         $this->row_number++;
 
+        $this->prev_row = $this->current_row;
         $this->current_row = array();
 
         // Walk through the document until the beginning of the first spreadsheet row.
@@ -398,7 +409,21 @@ class Reader implements Iterator, Countable
                     }
 
                     // Format value if necessary
-                    $value = $this->number_format->tryFormatValue($value, $style_id);
+                    try {
+                        $value = $this->number_format->tryFormatValue($value, $style_id);
+                    } catch (Exception $e) {
+                        $msg = $e->getMessage();
+                        if(strpos($msg, 'format with index [') === 0 && strpos($msg, '] was not defined.') !== false &&
+                            $this->format_not_found_handler !== null) {
+                            $value = call_user_func_array($this->format_not_found_handler, [
+                                $value,
+                                $style_id,
+                                $this->prev_row,
+                            ]);
+                        } else {
+                            throw $e;
+                        }
+                    }
 
                     $this->current_row[$cell_index] = $value;
                     break;
